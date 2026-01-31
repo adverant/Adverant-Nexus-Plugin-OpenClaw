@@ -9,6 +9,7 @@
  */
 
 import winston from 'winston';
+// @ts-ignore - winston-daily-rotate-file types not bundled
 import DailyRotateFile from 'winston-daily-rotate-file';
 import path from 'path';
 
@@ -76,8 +77,8 @@ if (NODE_ENV === 'production') {
   );
 }
 
-// Create logger instance
-const logger = winston.createLogger({
+// Create internal winston logger instance
+const winstonLogger = winston.createLogger({
   levels: LOG_LEVELS,
   level: LOG_LEVEL,
   transports,
@@ -114,35 +115,35 @@ export class Logger {
    * Log error message
    */
   error(message: string, context: LogContext = {}): void {
-    logger.error(message, { ...this.context, ...context });
+    winstonLogger.error(message, { ...this.context, ...context });
   }
 
   /**
    * Log warning message
    */
   warn(message: string, context: LogContext = {}): void {
-    logger.warn(message, { ...this.context, ...context });
+    winstonLogger.warn(message, { ...this.context, ...context });
   }
 
   /**
    * Log info message
    */
   info(message: string, context: LogContext = {}): void {
-    logger.info(message, { ...this.context, ...context });
+    winstonLogger.info(message, { ...this.context, ...context });
   }
 
   /**
    * Log debug message
    */
   debug(message: string, context: LogContext = {}): void {
-    logger.debug(message, { ...this.context, ...context });
+    winstonLogger.debug(message, { ...this.context, ...context });
   }
 
   /**
    * Log with automatic level detection from error
    */
   log(level: 'error' | 'warn' | 'info' | 'debug', message: string, context: LogContext = {}): void {
-    logger.log(level, message, { ...this.context, ...context });
+    winstonLogger.log(level, message, { ...this.context, ...context });
   }
 }
 
@@ -150,6 +151,9 @@ export class Logger {
 export const defaultLogger = new Logger({
   service: 'nexus-openclaw',
 });
+
+// Export as 'logger' for backwards compatibility
+export const logger = defaultLogger;
 
 // Export convenience functions
 export const createLogger = (context: LogContext): Logger => {

@@ -18,7 +18,7 @@
  * @version 1.0.0
  */
 
-import { Bot, Context, session, InlineKeyboard, webhookCallback } from 'grammy';
+import { Bot, Context, session, InlineKeyboard, webhookCallback, InputFile } from 'grammy';
 import { run, sequentialize } from '@grammyjs/runner';
 import { EventEmitter } from 'events';
 
@@ -494,7 +494,7 @@ export class TelegramAdapter extends EventEmitter implements ChannelAdapter {
     this.runner = run(this.bot, {
       runner: {
         fetch: {
-          allowed_updates: this.config.allowedUpdates || []
+          allowed_updates: (this.config.allowedUpdates || []) as any
         }
       }
     });
@@ -514,7 +514,7 @@ export class TelegramAdapter extends EventEmitter implements ChannelAdapter {
 
     await this.bot.api.setWebhook(this.config.webhookUrl, {
       secret_token: this.config.webhookSecret,
-      allowed_updates: this.config.allowedUpdates || []
+      allowed_updates: (this.config.allowedUpdates || []) as any
     });
 
     this.options.logger.info('Telegram webhook configured');
@@ -572,7 +572,8 @@ export class TelegramAdapter extends EventEmitter implements ChannelAdapter {
 
         case MessageType.IMAGE:
           if (message.media) {
-            sentMessage = await this.bot.api.sendPhoto(chatId, message.media.url || message.media.buffer!, {
+            const photoInput = message.media.url || new InputFile(message.media.buffer!, message.media.filename);
+            sentMessage = await this.bot.api.sendPhoto(chatId, photoInput, {
               caption: message.content,
               reply_markup: replyMarkup
             });
@@ -581,7 +582,8 @@ export class TelegramAdapter extends EventEmitter implements ChannelAdapter {
 
         case MessageType.VIDEO:
           if (message.media) {
-            sentMessage = await this.bot.api.sendVideo(chatId, message.media.url || message.media.buffer!, {
+            const videoInput = message.media.url || new InputFile(message.media.buffer!, message.media.filename);
+            sentMessage = await this.bot.api.sendVideo(chatId, videoInput, {
               caption: message.content,
               reply_markup: replyMarkup
             });
@@ -590,7 +592,8 @@ export class TelegramAdapter extends EventEmitter implements ChannelAdapter {
 
         case MessageType.AUDIO:
           if (message.media) {
-            sentMessage = await this.bot.api.sendAudio(chatId, message.media.url || message.media.buffer!, {
+            const audioInput = message.media.url || new InputFile(message.media.buffer!, message.media.filename);
+            sentMessage = await this.bot.api.sendAudio(chatId, audioInput, {
               caption: message.content,
               reply_markup: replyMarkup
             });
@@ -599,7 +602,8 @@ export class TelegramAdapter extends EventEmitter implements ChannelAdapter {
 
         case MessageType.DOCUMENT:
           if (message.media) {
-            sentMessage = await this.bot.api.sendDocument(chatId, message.media.url || message.media.buffer!, {
+            const docInput = message.media.url || new InputFile(message.media.buffer!, message.media.filename);
+            sentMessage = await this.bot.api.sendDocument(chatId, docInput, {
               caption: message.content,
               reply_markup: replyMarkup
             });

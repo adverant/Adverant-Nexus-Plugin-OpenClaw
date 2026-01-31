@@ -11,7 +11,7 @@
 
 import { Pool, PoolClient } from 'pg';
 import { ChannelConfig, ChannelType, ConnectionStatus } from '../../types/channel.types';
-import crypto from 'crypto';
+import crypto, { CipherGCM, DecipherGCM } from 'crypto';
 
 /**
  * Encryption helper for channel credentials
@@ -31,7 +31,8 @@ class ChannelEncryption {
    */
   encrypt(data: Record<string, any>): string {
     const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv(this.algorithm, this.key, iv);
+    // Cast to CipherGCM since we're using aes-256-gcm algorithm
+    const cipher = crypto.createCipheriv(this.algorithm, this.key, iv) as CipherGCM;
 
     const encrypted = Buffer.concat([
       cipher.update(JSON.stringify(data), 'utf8'),
@@ -53,11 +54,12 @@ class ChannelEncryption {
   decrypt(encrypted: string): Record<string, any> {
     const { iv, data, authTag } = JSON.parse(encrypted);
 
+    // Cast to DecipherGCM since we're using aes-256-gcm algorithm
     const decipher = crypto.createDecipheriv(
       this.algorithm,
       this.key,
       Buffer.from(iv, 'hex')
-    );
+    ) as DecipherGCM;
 
     decipher.setAuthTag(Buffer.from(authTag, 'hex'));
 

@@ -26,7 +26,8 @@ export interface AuthenticatedUser {
   userId: string;
   organizationId: string;
   email: string;
-  tier: string;
+  name?: string;
+  tier: 'open_source' | 'teams' | 'government';
   permissions: string[];
   exp: number;  // Token expiration timestamp
   iat: number;  // Token issued at timestamp
@@ -41,6 +42,23 @@ interface TokenValidationResponse {
     id: string;
     organization_id: string;
     email: string;
+    name?: string;
+    tier: string;
+    permissions: string[];
+  };
+  error?: string;
+}
+
+/**
+ * API key validation response
+ */
+interface ApiKeyValidationResponse {
+  valid: boolean;
+  user?: {
+    id: string;
+    organization_id: string;
+    email: string;
+    name?: string;
     tier: string;
     permissions: string[];
   };
@@ -140,11 +158,13 @@ export class NexusAuthClient {
       }
 
       // Map response to AuthenticatedUser
+      const tierValue = response.data.user.tier || 'open_source';
       const user: AuthenticatedUser = {
         userId: response.data.user.id,
         organizationId: response.data.user.organization_id,
         email: response.data.user.email,
-        tier: response.data.user.tier || 'open_source',
+        name: response.data.user.name,
+        tier: (tierValue === 'teams' || tierValue === 'government') ? tierValue : 'open_source',
         permissions: response.data.user.permissions || [],
         exp: decoded.exp || 0,
         iat: decoded.iat || 0
@@ -171,6 +191,113 @@ export class NexusAuthClient {
 
       // Re-throw other errors
       throw error;
+    }
+  }
+
+  /**
+   * Validate API key and return user information
+   *
+   * @param apiKey - API key to validate
+   * @returns Authenticated user information
+   * @throws Error if API key is invalid
+   */
+  async validateApiKey(apiKey: string): Promise<AuthenticatedUser> {
+    // Check cache first
+    if (this.redis) {
+      const cached = await this.getCachedApiKey(apiKey);
+      if (cached) {
+        return cached;
+      }
+    }
+
+    try {
+      // Validate with auth service
+      const response = await this.httpClient.post<ApiKeyValidationResponse>(
+        '/v1/auth/validate-api-key',
+        { apiKey }
+      );
+
+      if (!response.data.valid || !response.data.user) {
+        throw new Error(response.data.error || 'Invalid API key');
+      }
+
+      // Map response to AuthenticatedUser
+      const tierValue = response.data.user.tier || 'open_source';
+      const user: AuthenticatedUser = {
+        userId: response.data.user.id,
+        organizationId: response.data.user.organization_id,
+        email: response.data.user.email,
+        name: response.data.user.name,
+        tier: (tierValue === 'teams' || tierValue === 'government') ? tierValue : 'open_source',
+        permissions: response.data.user.permissions || [],
+        exp: Math.floor(Date.now() / 1000) + 3600, // API keys don't expire, but cache for 1 hour
+        iat: Math.floor(Date.now() / 1000)
+      };
+
+      // Cache the validated API key
+      if (this.redis) {
+        await this.cacheApiKey(apiKey, user);
+      }
+
+      return user;
+
+    } catch (error) {
+      // Handle axios errors
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 401) {
+          throw new Error('Invalid API key');
+        }
+        if (error.response?.status === 403) {
+          throw new Error('Insufficient permissions');
+        }
+        throw new Error(`Auth service error: ${error.message}`);
+      }
+
+      // Re-throw other errors
+      throw error;
+    }
+  }
+
+  /**
+   * Get cached API key validation result
+   */
+  private async getCachedApiKey(apiKey: string): Promise<AuthenticatedUser | null> {
+    if (!this.redis) {
+      return null;
+    }
+
+    try {
+      const cacheKey = `auth:apikey:${apiKey.slice(-16)}`;
+      const cached = await this.redis.get(cacheKey);
+
+      if (!cached) {
+        return null;
+      }
+
+      return JSON.parse(cached) as AuthenticatedUser;
+
+    } catch (error) {
+      console.error('Failed to get cached API key:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Cache API key validation result
+   */
+  private async cacheApiKey(apiKey: string, user: AuthenticatedUser): Promise<void> {
+    if (!this.redis) {
+      return;
+    }
+
+    try {
+      const cacheKey = `auth:apikey:${apiKey.slice(-16)}`;
+      // Cache API keys for 1 hour
+      await this.redis.setex(cacheKey, 3600, JSON.stringify(user));
+
+    } catch (error) {
+      console.error('Failed to cache API key:', error);
+      // Non-fatal error, continue without caching
     }
   }
 

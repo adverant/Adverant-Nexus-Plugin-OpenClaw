@@ -191,9 +191,9 @@ export class DiscordAdapter extends EventEmitter implements ChannelAdapter {
       this.options.logger.warn('Discord client warning', { warning });
     });
 
-    // Disconnect handling
-    this.client.on(Events.Disconnect, () => {
-      this.options.logger.warn('Discord client disconnected');
+    // Disconnect handling (ShardDisconnect in discord.js v14+)
+    this.client.on(Events.ShardDisconnect, (event, shardId) => {
+      this.options.logger.warn('Discord client disconnected', { shardId, code: event.code });
       if (!this.isShuttingDown) {
         this.attemptReconnect();
       }
@@ -437,6 +437,11 @@ export class DiscordAdapter extends EventEmitter implements ChannelAdapter {
 
       if (!channel || !channel.isTextBased()) {
         throw new Error('Invalid channel');
+      }
+
+      // Type guard to ensure channel supports send method
+      if (!('send' in channel)) {
+        throw new Error('Channel does not support sending messages');
       }
 
       const messagePayload: any = {};

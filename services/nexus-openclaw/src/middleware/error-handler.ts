@@ -171,7 +171,7 @@ export function errorHandler(err: AppError, req: Request, res: Response, next: N
     });
   } else if (statusCode >= 400) {
     logger.warn('Client error occurred', {
-      error: err.message,
+      errorMessage: err.message,
       code: err.code,
       ...requestContext,
     });

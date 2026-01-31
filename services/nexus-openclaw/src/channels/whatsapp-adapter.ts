@@ -25,7 +25,8 @@ import makeWASocket, {
   WASocket,
   WAMessage,
   AnyMessageContent,
-  delay
+  delay,
+  downloadMediaMessage
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import QRCode from 'qrcode';
@@ -416,7 +417,16 @@ export class WhatsAppAdapter extends EventEmitter implements ChannelAdapter {
         throw new Error('Socket not initialized');
       }
 
-      const buffer = await this.socket.downloadMediaMessage(msg, 'buffer', {});
+      // Use the standalone downloadMediaMessage function from Baileys
+      const buffer = await downloadMediaMessage(
+        msg,
+        'buffer',
+        {},
+        {
+          logger: this.options.logger as any,
+          reuploadRequest: this.socket.updateMediaMessage
+        }
+      );
 
       const message = msg.message;
       const content = message?.[mediaType as keyof proto.IMessage] as any;
@@ -425,7 +435,7 @@ export class WhatsAppAdapter extends EventEmitter implements ChannelAdapter {
         buffer: buffer as Buffer,
         mimeType: content?.mimetype || 'application/octet-stream',
         filename: content?.fileName || `media.${mediaType}`,
-        size: buffer?.length
+        size: (buffer as Buffer)?.length
       };
     } catch (error) {
       this.options.logger.error('Failed to download WhatsApp media', { error, mediaType });
@@ -474,63 +484,52 @@ export class WhatsAppAdapter extends EventEmitter implements ChannelAdapter {
    * Build WhatsApp message content
    */
   private async buildMessageContent(message: OutgoingMessage): Promise<AnyMessageContent> {
-    const content: AnyMessageContent = {};
-
     switch (message.type) {
       case MessageType.TEXT:
-        content.text = message.content;
-        break;
+        return { text: message.content } as AnyMessageContent;
 
       case MessageType.IMAGE:
         if (message.media) {
-          content.image = message.media.buffer || { url: message.media.url };
-          content.caption = message.content;
-          content.mimetype = message.media.mimeType;
+          return {
+            image: message.media.buffer || { url: message.media.url },
+            caption: message.content,
+            mimetype: message.media.mimeType
+          } as AnyMessageContent;
         }
-        break;
+        throw new Error('Image message requires media');
 
       case MessageType.VIDEO:
         if (message.media) {
-          content.video = message.media.buffer || { url: message.media.url };
-          content.caption = message.content;
-          content.mimetype = message.media.mimeType;
+          return {
+            video: message.media.buffer || { url: message.media.url },
+            caption: message.content,
+            mimetype: message.media.mimeType
+          } as AnyMessageContent;
         }
-        break;
+        throw new Error('Video message requires media');
 
       case MessageType.AUDIO:
         if (message.media) {
-          content.audio = message.media.buffer || { url: message.media.url };
-          content.mimetype = message.media.mimeType;
+          return {
+            audio: message.media.buffer || { url: message.media.url },
+            mimetype: message.media.mimeType
+          } as AnyMessageContent;
         }
-        break;
+        throw new Error('Audio message requires media');
 
       case MessageType.DOCUMENT:
         if (message.media) {
-          content.document = message.media.buffer || { url: message.media.url };
-          content.fileName = message.media.filename;
-          content.mimetype = message.media.mimeType;
+          return {
+            document: message.media.buffer || { url: message.media.url },
+            fileName: message.media.filename,
+            mimetype: message.media.mimeType
+          } as AnyMessageContent;
         }
-        break;
+        throw new Error('Document message requires media');
 
       default:
         throw new Error(`Unsupported message type: ${message.type}`);
     }
-
-    // Add buttons if present
-    if (message.buttons && message.buttons.length > 0) {
-      const buttons = message.buttons.map((btn, idx) => ({
-        buttonId: btn.id || `btn_${idx}`,
-        buttonText: { displayText: btn.label },
-        type: 1
-      }));
-
-      Object.assign(content, {
-        buttons,
-        headerType: 1
-      });
-    }
-
-    return content;
   }
 
   /**

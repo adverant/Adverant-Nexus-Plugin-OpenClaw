@@ -133,7 +133,7 @@ export class OpenClawGateway {
 
         next();
       } catch (error) {
-        logger.warn('WebSocket auth failed', { error: (error as Error).message });
+        logger.warn('WebSocket auth failed', { errorMessage: (error as Error).message });
         next(new Error('Invalid or expired token'));
       }
     });
@@ -397,7 +397,7 @@ export class OpenClawGateway {
   private handleError(socket: Socket, error: Error): void {
     logger.error('Socket error', {
       socketId: socket.id,
-      error: error.message,
+      error: error,
     });
   }
 

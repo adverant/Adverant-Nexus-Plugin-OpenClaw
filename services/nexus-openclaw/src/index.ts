@@ -30,19 +30,20 @@ dotenv.config();
 
 // Internal imports
 import { OpenClawGateway } from './gateway/websocket-gateway';
-import { DatabaseService } from './database/database.service';
-import { RedisService } from './redis/redis.service';
 import { ChannelManager } from './channels/channel-manager';
-import { Logger } from './utils/logger';
-import { ErrorHandler } from './middleware/error-handler';
-import { RequestLogger } from './middleware/request-logger';
-import { RateLimiter } from './middleware/rate-limiter';
-import { AuthMiddleware } from './middleware/auth';
+import { createLogger, Logger } from './utils/logger';
+import { errorHandler } from './middleware/error-handler';
+import { requestLogger } from './middleware/request-logger';
+import { RateLimiterFactory, rateLimiter } from './middleware/rate-limiter';
+import { requireAuth } from './middleware/auth';
+import { NexusAuthClient } from './auth/nexus-auth-client';
+import { Pool } from 'pg';
+import Redis from 'ioredis';
 
 // API Routes
-import { sessionRoutes } from './api/sessions';
-import { skillRoutes } from './api/skills';
-import { channelRoutes } from './api/channels';
+import { sessionsRoutes } from './api/sessions';
+import { skillsRoutes } from './api/skills';
+import { channelsRoutes } from './api/channels';
 import { cronRoutes } from './api/cron';
 import { analyticsRoutes } from './api/analytics';
 
@@ -58,8 +59,7 @@ const BUILD_TIMESTAMP = process.env.NEXUS_BUILD_TIMESTAMP || new Date().toISOStr
 const GIT_COMMIT = process.env.NEXUS_GIT_COMMIT || 'unknown';
 
 // Initialize logger
-const logger = new Logger({
-  level: process.env.LOG_LEVEL || 'info',
+const logger = createLogger({
   service: PLUGIN_ID,
   version: PLUGIN_VERSION,
   environment: NODE_ENV,
@@ -75,8 +75,10 @@ class OpenClawServer {
   private server: http.Server;
   private gateway: OpenClawGateway;
   private channelManager: ChannelManager;
-  private database: DatabaseService;
-  private redis: RedisService;
+  private database: Pool | null = null;
+  private redis: Redis | null = null;
+  private authClient: NexusAuthClient;
+  private rateLimiterFactory: RateLimiterFactory | null = null;
   private isShuttingDown: boolean = false;
 
   constructor() {
@@ -84,8 +86,7 @@ class OpenClawServer {
     this.server = http.createServer(this.app);
     this.gateway = new OpenClawGateway();
     this.channelManager = new ChannelManager();
-    this.database = new DatabaseService();
-    this.redis = new RedisService();
+    this.authClient = new NexusAuthClient();
   }
 
   /**
@@ -134,16 +135,21 @@ class OpenClawServer {
     logger.info('Connecting to databases...');
 
     // Connect to PostgreSQL
-    await this.database.connect({
+    this.database = new Pool({
       host: process.env.POSTGRES_HOST || 'postgres.nexus.svc.cluster.local',
       port: parseInt(process.env.POSTGRES_PORT || '5432', 10),
       database: process.env.POSTGRES_DATABASE || 'unified_nexus',
       user: process.env.POSTGRES_USER || 'nexus',
       password: process.env.POSTGRES_PASSWORD || '',
-      max: 20,  // Connection pool size
+      max: 20,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000
     });
+
+    // Test connection
+    const client = await this.database.connect();
+    await client.query('SELECT NOW()');
+    client.release();
 
     logger.info('Connected to PostgreSQL', {
       host: process.env.POSTGRES_HOST,
@@ -151,8 +157,8 @@ class OpenClawServer {
     });
 
     // Connect to Redis
-    await this.redis.connect({
-      url: process.env.REDIS_URL || 'redis://redis.nexus.svc.cluster.local:6379',
+    const redisUrl = process.env.REDIS_URL || 'redis://redis.nexus.svc.cluster.local:6379';
+    this.redis = new Redis(redisUrl, {
       maxRetriesPerRequest: 3,
       enableReadyCheck: true,
       retryStrategy: (times: number) => {
@@ -161,8 +167,17 @@ class OpenClawServer {
       }
     });
 
+    // Test connection
+    await this.redis.ping();
+
+    // Set Redis in auth client for caching
+    this.authClient.setRedis(this.redis);
+
+    // Create rate limiter factory with Redis
+    this.rateLimiterFactory = new RateLimiterFactory(this.redis);
+
     logger.info('Connected to Redis', {
-      url: process.env.REDIS_URL
+      url: redisUrl
     });
   }
 
@@ -231,10 +246,12 @@ class OpenClawServer {
     }));
 
     // Request logging
-    this.app.use(RequestLogger.middleware(logger));
+    this.app.use(requestLogger);
 
     // Rate limiting (tiered based on authentication)
-    this.app.use(RateLimiter.middleware(this.redis));
+    if (this.rateLimiterFactory) {
+      this.app.use(rateLimiter(this.rateLimiterFactory));
+    }
 
     // Trust proxy (for K8s)
     this.app.set('trust proxy', true);
@@ -260,16 +277,22 @@ class OpenClawServer {
     this.app.get('/ready', async (req: Request, res: Response) => {
       try {
         // Check database connectivity
-        await this.database.ping();
+        if (this.database) {
+          const client = await this.database.connect();
+          await client.query('SELECT 1');
+          client.release();
+        }
 
         // Check Redis connectivity
-        await this.redis.ping();
+        if (this.redis) {
+          await this.redis.ping();
+        }
 
         res.status(200).json({
           status: 'ready',
           checks: {
-            database: 'ok',
-            redis: 'ok',
+            database: this.database ? 'ok' : 'not_configured',
+            redis: this.redis ? 'ok' : 'not_configured',
             websocket: this.gateway.isReady() ? 'ok' : 'not_ready'
           }
         });
@@ -296,12 +319,13 @@ class OpenClawServer {
       res.end(await metricsRegister.metrics());
     });
 
-    // Authenticated API routes
-    apiRouter.use('/sessions', AuthMiddleware.authenticate, sessionRoutes);
-    apiRouter.use('/skills', AuthMiddleware.authenticate, skillRoutes);
-    apiRouter.use('/channels', AuthMiddleware.authenticate, channelRoutes);
-    apiRouter.use('/cron', AuthMiddleware.authenticate, cronRoutes);
-    apiRouter.use('/analytics', AuthMiddleware.authenticate, analyticsRoutes);
+    // Authenticated API routes - use requireAuth middleware with auth client
+    const authMiddleware = requireAuth(this.authClient);
+    apiRouter.use('/sessions', authMiddleware, sessionsRoutes);
+    apiRouter.use('/skills', authMiddleware, skillsRoutes);
+    apiRouter.use('/channels', authMiddleware, channelsRoutes);
+    apiRouter.use('/cron', authMiddleware, cronRoutes);
+    apiRouter.use('/analytics', authMiddleware, analyticsRoutes);
 
     // Mount API router
     this.app.use('/openclaw/api/v1', apiRouter);
@@ -346,8 +370,12 @@ class OpenClawServer {
    * Initialize channel manager
    */
   private async initializeChannelManager(): Promise<void> {
+    if (!this.database) {
+      throw new Error('Database must be connected before initializing channel manager');
+    }
+
     await this.channelManager.initialize({
-      database: this.database.getPool(),
+      database: this.database,
       logger,
       onMessage: async (channelId, message) => {
         // Forward messages to skill executor through gateway
@@ -378,7 +406,7 @@ class OpenClawServer {
    * Configure error handling middleware (must be last)
    */
   private configureErrorHandling(): void {
-    this.app.use(ErrorHandler.middleware(logger));
+    this.app.use(errorHandler);
   }
 
   /**
@@ -438,12 +466,16 @@ class OpenClawServer {
       logger.info('Channel manager closed');
 
       // Close database connections
-      await this.database.disconnect();
-      logger.info('Database disconnected');
+      if (this.database) {
+        await this.database.end();
+        logger.info('Database disconnected');
+      }
 
       // Close Redis connections
-      await this.redis.disconnect();
-      logger.info('Redis disconnected');
+      if (this.redis) {
+        await this.redis.quit();
+        logger.info('Redis disconnected');
+      }
 
       logger.info('Graceful shutdown completed');
     } catch (error) {
