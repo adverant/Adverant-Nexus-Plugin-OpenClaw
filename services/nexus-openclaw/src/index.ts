@@ -134,9 +134,9 @@ class OpenClawServer {
   private async connectDatabases(): Promise<void> {
     logger.info('Connecting to databases...');
 
-    // Connect to PostgreSQL
+    // Connect to PostgreSQL (service name is nexus-postgres in K8s cluster)
     this.database = new Pool({
-      host: process.env.POSTGRES_HOST || 'postgres.nexus.svc.cluster.local',
+      host: process.env.POSTGRES_HOST || 'nexus-postgres.nexus.svc.cluster.local',
       port: parseInt(process.env.POSTGRES_PORT || '5432', 10),
       database: process.env.POSTGRES_DATABASE || 'unified_nexus',
       user: process.env.POSTGRES_USER || 'nexus',
@@ -156,8 +156,8 @@ class OpenClawServer {
       database: process.env.POSTGRES_DATABASE
     });
 
-    // Connect to Redis
-    const redisUrl = process.env.REDIS_URL || 'redis://redis.nexus.svc.cluster.local:6379';
+    // Connect to Redis (service name is nexus-redis in K8s cluster)
+    const redisUrl = process.env.REDIS_URL || 'redis://nexus-redis.nexus.svc.cluster.local:6379';
     this.redis = new Redis(redisUrl, {
       maxRetriesPerRequest: 3,
       enableReadyCheck: true,
