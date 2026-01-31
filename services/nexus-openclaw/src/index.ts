@@ -334,11 +334,8 @@ class OpenClawServer {
    * Initialize WebSocket gateway
    */
   private async initializeWebSocket(): Promise<void> {
-    await this.gateway.initialize(this.server, {
-      redis: this.redis,
-      database: this.database,
-      logger
-    });
+    const redisUrl = process.env.REDIS_URL || 'redis://redis.nexus.svc.cluster.local:6379';
+    await this.gateway.initialize(this.server, redisUrl);
 
     logger.info('WebSocket gateway initialized', {
       path: '/openclaw/ws'
